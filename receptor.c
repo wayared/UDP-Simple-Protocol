@@ -7,13 +7,14 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #define MAX_SEGMENT_SIZE 1024
 
 void receive_file(int port) {
     int sockfd;
     struct sockaddr_in server_addr, client_addr;
-    char buffer[MAX_SEGMENT_SIZE];
+    unsigned char buffer[MAX_SEGMENT_SIZE]; // Usar unsigned char para manejar datos binarios
     socklen_t addr_size;
     int n;
 
@@ -40,6 +41,8 @@ void receive_file(int port) {
     struct sockaddr_in client_addr_rcv;
     socklen_t addr_rcv_size;
 
+    int file_fd = -1;  // Mantener el descriptor de archivo abierto fuera del bucle
+
     while (1) {
         bzero(buffer, MAX_SEGMENT_SIZE);
         addr_rcv_size = sizeof(client_addr_rcv);
@@ -50,27 +53,29 @@ void receive_file(int port) {
             exit(EXIT_FAILURE);
         }
 
-        char filename[50];
-        sprintf(filename, "archivos_recibidos/archivo_%d.txt", (int)time(NULL));
-
-        FILE *file = fopen(filename, "ab");
-        if (file == NULL) {
-            perror("Error al abrir el archivo");
-            close(sockfd);
-            exit(EXIT_FAILURE);
+        if (file_fd < 0) {
+            // Abrir el archivo si aún no está abierto
+            char filename[50];
+            sprintf(filename, "archivos_recibidos/archivo_%d.txt", (int)time(NULL));
+            file_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (file_fd < 0) {
+                perror("Error al abrir el archivo");
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
         }
 
-        int bytes_written = fwrite(buffer, sizeof(char), n, file);
+        // Escribir los datos en binario
+        int bytes_written = write(file_fd, buffer, n);
         if (bytes_written != n) {
             perror("Error al escribir en el archivo");
-            fclose(file);
+            close(file_fd);
             close(sockfd);
             exit(EXIT_FAILURE);
         }
-
-        fclose(file);
     }
 
+    close(file_fd); // Cerrar el archivo después del bucle (si se abre)
     close(sockfd);
 }
 

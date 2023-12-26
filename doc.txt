@@ -1,1 +1,0 @@
-Diseñar un protocolo simple de transporte que proporcione un servicio confiable al transmitir un archivo grande. El protocolo debe asegurar que la data sea entregada en orden y sin duplicados, por lo que será evaluada en una red simulada no confiable. Su solución deberá seguir los siguientes requerimientos.
