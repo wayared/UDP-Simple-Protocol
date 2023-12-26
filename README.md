@@ -37,5 +37,8 @@ configurarlo para que exista
 > - Duplicidad de paquetes
 
 > - Para la generación del archivo grande podrán utilizar el comando head.
+head -c 10485760 <(printf '%.sSistemas Operativos\n' {1..1000000}) > archivo.txt
+
 > - Finalmente para comprobar que los archivos son los mismos podrán utilizar el comando
 diff.
+
