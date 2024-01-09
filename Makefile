@@ -11,4 +11,3 @@ receptor: receptor.c
 
 clean:
 	rm -f emisor receptor received_file
-

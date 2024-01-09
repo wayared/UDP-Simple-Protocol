@@ -2,105 +2,110 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 
-#define MAX_SEGMENT_SIZE 1024
+#define BUF_SIZE 1024
+#define MAX_SEQ_NUM 10000
 
-void receive_file(int port) {
-    int sockfd;
-    struct sockaddr_in server_addr, client_addr;
-    unsigned char buffer[MAX_SEGMENT_SIZE]; // Usar unsigned char para manejar datos binarios
-    socklen_t addr_size;
-    int n;
+struct Packet {
+    int seq_num;
+    char data[BUF_SIZE];
+};
 
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("[-]socket error");
-        exit(EXIT_FAILURE);
-    }
-
-    memset(&server_addr, '\0', sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    n = bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    if (n < 0) {
-        perror("[-]bind error");
-        exit(EXIT_FAILURE);
-    }
-
-    // Crear la carpeta "archivos_recibidos" si no existe
-    mkdir("archivos_recibidos", 0777);
-
-    struct sockaddr_in client_addr_rcv;
-    socklen_t addr_rcv_size;
-
-    int file_fd = -1;  // Mantener el descriptor de archivo abierto fuera del bucle
-
-    while (1) {
-        bzero(buffer, MAX_SEGMENT_SIZE);
-        addr_rcv_size = sizeof(client_addr_rcv);
-        n = recvfrom(sockfd, buffer, MAX_SEGMENT_SIZE, 0, (struct sockaddr*)&client_addr_rcv, &addr_rcv_size);
-        if (n < 0) {
-            perror("Error al recibir el paquete");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-
-        if (file_fd < 0) {
-            // Abrir el archivo si aún no está abierto
-            char filename[50];
-            sprintf(filename, "archivos_recibidos/archivo_%d.txt", (int)time(NULL));
-            file_fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            if (file_fd < 0) {
-                perror("Error al abrir el archivo");
-                close(sockfd);
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        // Escribir los datos en binario
-        int bytes_written = write(file_fd, buffer, n);
-        if (bytes_written != n) {
-            perror("Error al escribir en el archivo");
-            close(file_fd);
-            close(sockfd);
-            exit(EXIT_FAILURE);
+void createReceivedFolder() {
+    struct stat st = {0};
+    if (stat("archivos_recibidos", &st) == -1) {
+        if (mkdir("archivos_recibidos", 0777) == -1) {
+            perror("Error al crear la carpeta para archivos recibidos");
+            exit(1);
         }
     }
-
-    close(file_fd); // Cerrar el archivo después del bucle (si se abre)
-    close(sockfd);
 }
 
-int main(int argc, char **argv) {
-    int port = 0;
+void receiveAndSaveFiles(int sockfd, int num_emisores) {
+    FILE *file = NULL;
+    int expected_seq_num = 0;
+    int received_files = 0;
 
-    // Parsing de argumentos usando getopt
-    int opt;
-    while ((opt = getopt(argc, argv, "p:")) != -1) {
-        switch (opt) {
-            case 'p':
-                port = atoi(optarg);
-                break;
-            default:
-                fprintf(stderr, "Usage: %s -p <puerto>\n", argv[0]);
-                exit(EXIT_FAILURE);
+    while (1) {
+        struct Packet packet;
+        struct sockaddr_in sender_addr;
+        socklen_t sender_len = sizeof(sender_addr);
+
+        ssize_t recv_len = recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)&sender_addr, &sender_len);
+
+        if (recv_len == -1) {
+            perror("Error al recibir el paquete");
+            continue;
         }
+
+        if (packet.seq_num == -1) {
+            printf("Archivo recibido correctamente por el emisor #%d.\n", received_files + 1);
+            received_files++;
+
+            if (received_files == num_emisores) {
+                printf("Todos los archivos han sido recibidos.\n");
+                break;
+            }
+            continue;
+        }
+
+        if (packet.seq_num == expected_seq_num) {
+            if (file == NULL) {
+                char filepath[100];
+                sprintf(filepath, "archivos_recibidos/archivo_recibido_emisor_%d", received_files + 1);
+                file = fopen(filepath, "wb");
+                if (file == NULL) {
+                    perror("Error al abrir el archivo");
+                    break;
+                }
+            }
+
+            fwrite(packet.data, 1, recv_len - sizeof(int), file);
+            expected_seq_num++;
+        }
+
+        sendto(sockfd, &expected_seq_num, sizeof(int), 0, (struct sockaddr *)&sender_addr, sender_len);
     }
 
-    if (port == 0) {
-        fprintf(stderr, "Usage: %s -p <puerto>\n", argv[0]);
-        exit(EXIT_FAILURE);
+    if (file != NULL) {
+        fclose(file);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        printf("Uso: %s <puerto> <num_emisores>\n", argv[0]);
+        return 1;
     }
 
-    receive_file(port);
+    int sockfd;
+    struct sockaddr_in receiver_addr;
+    int port = atoi(argv[1]);
+    int num_emisores = atoi(argv[2]);
 
+    createReceivedFolder();
+
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+        perror("Error al crear el socket");
+        return 1;
+    }
+
+    memset(&receiver_addr, 0, sizeof(receiver_addr));
+    receiver_addr.sin_family = AF_INET;
+    receiver_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    receiver_addr.sin_port = htons(port);
+
+    if (bind(sockfd, (struct sockaddr *)&receiver_addr, sizeof(receiver_addr)) == -1) {
+        perror("Error al vincular el socket");
+        close(sockfd);
+        return 1;
+    }
+
+    receiveAndSaveFiles(sockfd, num_emisores);
+
+    close(sockfd);
     return 0;
 }
